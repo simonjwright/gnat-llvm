@@ -14,7 +14,7 @@ project GNAT_LLVM_C is
          when "llvm" =>
             for Driver ("C++") use "g++";
          when others =>
-            null;
+            for Driver ("C++") use "clang++";
       end case;
 
       case Build is

@@ -36,6 +36,8 @@ LDFLAGS=$(shell $(LLVM_CONFIG) --libs all --ldflags --system-libs)
 CXXFLAGS=
 ALL_CXXFLAGS=$(shell $(LLVM_CONFIG) --cxxflags) $(CXXFLAGS) $(CLANG_CXXFLAGS)
 
+LDFLAGS += -lc++
+
 ifeq ($(OS),Windows_NT)
   LN_S=cp -p
   LDFLAGS+=-Wl,--stack=0x2000000
@@ -128,7 +130,7 @@ LD_PATH=$(shell dirname $(shell gcc --print-prog-name=cc1))
 LIBSTDCXX_PATH=$(CXX_PREFIX)/lib64
 BOOT_DIRS=obj obj-tools bin lib
 
-stage1: 
+stage1:
 	$(MAKE) GPRBUILD="gprbuild -v -gnatwns" build-opt gnatlib-automated
 	$(RMDIR) stage1
 	$(MKDIR) stage1
