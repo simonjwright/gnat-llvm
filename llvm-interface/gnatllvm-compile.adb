@@ -108,7 +108,7 @@ package body GNATLLVM.Compile is
       Initialize_Environment;
       Thin_Pointer_Size := Set_Targ.Pointer_Size;
       Fat_Pointer_Size  := Thin_Pointer_Size * 2;
-      Size_Type         := Stand_Type (Thin_Pointer_Size);
+      Size_Type         := Stand_Type (Set_Targ.Bits_Per_Word);
       Int_32_Type       := Stand_Type (32);
       Int_64_Type       := Stand_Type (64);
 
@@ -177,6 +177,16 @@ package body GNATLLVM.Compile is
       --  Create a "void" pointer, which is i8* in LLVM
 
       Void_Ptr_T        := Type_Of (A_Char_GL_Type);
+
+      --  In most cases, addresses can be represented as Size_T (which
+      --  usually is an integer type of pointer width), but on
+      --  architectures with tagged pointers we would lose information by
+      --  doing so; use a void pointer on those architectures instead. We
+      --  don't want to use void pointers unconditionally because it puts a
+      --  burden on address arithmetic, which now requires conversions to
+      --  and from a suitable integer representation of the address.
+
+      Address_T := (if Tagged_Pointers then Void_Ptr_T else Size_T);
 
       --  The size of a pointer is specified in both the LLVM data layout
       --  string (usually from a --target specification) and the target

@@ -465,11 +465,50 @@ package body CCG.Instructions is
    --------------------------
 
    function Deref_For_Load_Store (Op, V : Value_T) return Str is
+      T             : constant Type_T  := Get_Load_Store_Type (V);
+      Need_Volatile : constant Boolean :=
+        Get_Volatile (V) and then not Is_Ref_To_Volatile (Op);
+
    begin
+      --  If this is a load or store of a partial integer, we need to
+      --  cast to a pointer to a struct consisting of an int of that bitsize
+      --  and reference the integer field. However, if the C compiler we're
+      --  using doesn't support packing, this won't help, so don't worry
+      --  about the out-of-bounds access. "Partial" here means that the LLVM
+      --  IR is asking to load fewer bits than a normal hardware operation
+      --  (which corresponds to a C type). So the first issue is when the
+      --  IR is referencing a three-byte object (17 to 24 bits) and the
+      --  next is above 32 but below 64-8.
+
+      if not Pack_Not_Supported
+        and then Is_Integral_Type (T)
+        and then Get_Scalar_Bit_Size (T) in 17 .. 24 | 33 .. 56 | 65 .. 120
+      then
+         declare
+            Bits   : constant Nat := Get_Scalar_Bit_Size (T);
+            Result : Str :=
+              "((struct ccg_i" & Bits & " *" &
+              (if Need_Volatile then "volatile" else "") & ") " & Op & ")->f";
+
+         begin
+            Need_IXX_Struct (Bits);
+
+            --  If this is larger than an int size record, some C compilers,
+            --  such as GCC, will treat a subsequent operation, such as a
+            --  shift, as being done in Bits, so cast to long long to
+            --  prevent that odd behavior.
+
+            if Is_A_Load_Inst (V) and then Bits > Int_Size then
+               Result := "((long long) " & Result & ")";
+            end if;
+
+            return Result;
+         end;
+
       --  If this isn't volatile, it's a normal dereference. Likewise if
       --  it's already known to be volatile.
 
-      if not Get_Volatile (V) or else Is_Ref_To_Volatile (Op) then
+      elsif not Need_Volatile then
          return Deref (Op);
 
       --  Otherwise, cast to a volatile form of the type and dereference that
@@ -707,17 +746,6 @@ package body CCG.Instructions is
       elsif Opc = Op_Trunc
         and then Next_Pow2 (Get_Scalar_Bit_Size (Src_T)) =
                  Next_Pow2 (Get_Scalar_Bit_Size (Dest_T))
-      then
-         return +Op;
-
-      --  Similarly, if this is an extension from a small integral type
-      --  that's the same C type and the signedness is the same, it's
-      --  the same C type.
-
-      elsif Opc in Op_Z_Ext | Op_S_Ext
-        and then Next_Pow2 (Get_Scalar_Bit_Size (Dest_T)) =
-                 Next_Pow2 (Get_Scalar_Bit_Size (Src_T))
-        and then (Opc = Op_Z_Ext) = Is_Unsigned (Op)
       then
          return +Op;
       end if;

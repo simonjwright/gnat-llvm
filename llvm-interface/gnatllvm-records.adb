@@ -1345,6 +1345,8 @@ package body GNATLLVM.Records is
       --  Object_Size clause has been specified. Otherwise, the only
       --  contributions to alignment are the alignment of the fields.
 
+      E_Align : constant Nat                  := Nat'Min (F_Align, R_Align);
+
    begin
       --  If the field can't be misaligned, its alignment always contributes
       --  directly to the alignment of the record.
@@ -1365,16 +1367,12 @@ package body GNATLLVM.Records is
       elsif No (Component_Clause (AF)) then
          return Nat'Min (F_Align, R_Align);
 
-      --  Otherwise, find the largest alignment that's consistent with the
-      --  size and position of the component.
+      --  Otherwise, if the alignment is consistent with the size and
+      --  position of the component, use it.
 
       else
-         return This_Align : Nat := Nat'Min (F_Align, R_Align) do
-            while Pos mod This_Align /= 0 or else Size mod This_Align /= 0 loop
-               This_Align := This_Align / 2;
-            end loop;
-
-         end return;
+         return (if   Pos mod E_Align = 0 and then Size mod E_Align = 0
+                 then E_Align else BPU);
       end if;
 
    end Effective_Field_Alignment;
@@ -1860,9 +1858,10 @@ package body GNATLLVM.Records is
       --  type of this piece (which has no corresponding GNAT type).
 
       if Is_Nonnative_Type (Rec_Type) then
-         Result   := Ptr_To_Relationship (Result,
-                                          Pointer_Type (RI.LLVM_Type, 0),
-                                          Rec_GT, Reference_To_Unknown);
+         Result :=
+           Ptr_To_Relationship
+             (Result, Pointer_Type (RI.LLVM_Type, Address_Space),
+              Rec_GT, Reference_To_Unknown);
          Set_Unknown_T (Result, RI.LLVM_Type);
          Result_T := RI.LLVM_Type;
       else
@@ -2082,9 +2081,11 @@ package body GNATLLVM.Records is
                   New_T : constant Type_T := Int_Ty (Get_Scalar_Bit_Size (T));
 
                begin
-                  Result := Ptr_To_Relationship (Result,
-                                                 Pointer_Type (New_T, 0),
-                                                 Reference_To_Unknown);
+                  Result :=
+                    Ptr_To_Relationship
+                      (Result,
+                       Pointer_Type (New_T, Address_Space),
+                       Reference_To_Unknown);
                   Set_Unknown_T (Result, New_T);
                end;
             end if;
@@ -2151,7 +2152,10 @@ package body GNATLLVM.Records is
                         else Allocate_For_Type (F_GT));
                      Mem_As_Int_Ptr : GL_Value          :=
                        Ptr_To_Relationship
-                         (Memory, Pointer_Type (Type_Of (Result), 0),
+                         (Memory,
+                          Pointer_Type
+                            (Type_Of (Result),
+                             Address_Space),
                           F_GT, Reference_To_Unknown);
 
                   begin
@@ -2293,9 +2297,11 @@ package body GNATLLVM.Records is
                   New_T : constant Type_T := Int_Ty (Get_Type_Size (T));
 
                begin
-                  Data_LHS := Ptr_To_Relationship (Data_LHS,
-                                                   Pointer_Type (New_T, 0),
-                                                   Reference_To_Unknown);
+                  Data_LHS :=
+                    Ptr_To_Relationship
+                      (Data_LHS,
+                       Pointer_Type (New_T, Address_Space),
+                       Reference_To_Unknown);
                   Set_Unknown_T (Data_LHS, New_T);
                   Rec_Data := Data_LHS;
                end;
@@ -2327,8 +2333,10 @@ package body GNATLLVM.Records is
             else
                RHS_Cvt := Get (RHS_Cvt, Reference);
                RHS_Cvt :=
-                 Ptr_To_Relationship (RHS_Cvt, Pointer_Type (New_RHS_T, 0),
-                                      Reference_To_Unknown);
+                 Ptr_To_Relationship
+                   (RHS_Cvt,
+                    Pointer_Type (New_RHS_T, Address_Space),
+                    Reference_To_Unknown);
                Set_Unknown_T (RHS_Cvt, New_RHS_T);
                RHS_Cvt := Load (RHS_Cvt);
             end if;

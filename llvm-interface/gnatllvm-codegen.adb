@@ -72,6 +72,9 @@ package body GNATLLVM.Codegen is
    GNAT_LLVM_Initialized          : Boolean := False;
    --  Set when Initialize_GNAT_LLVM has done something
 
+   Arch                           : String_Access;
+   --  Name of the architecture requested with -march.
+
    procedure Process_Switch (S : String);
    --  Process one command-line switch
 
@@ -162,20 +165,29 @@ package body GNATLLVM.Codegen is
          Libdevice_Filename :=
            new String'(Switch_Value (S, "-mcuda-libdevice="));
 
-      --  -march= and -mcpu= set the CPU to be used. -mtune= does likewise,
-      --  but only if we haven't already seen one of the previous two switches
+      --  -march= and -mcpu= set the architecture and CPU to be used.
+      --  -mtune= does likewise, but only if we haven't already seen one of
+      --  the previous two switches
 
       elsif Starts_With (S, "-march=") then
-         To_Free       := CPU;
-         CPU           := new String'(Switch_Value (S, "-march="));
+         To_Free       := Arch;
+         Arch          := new String'(Switch_Value (S, "-march="));
       elsif Starts_With (S, "-mcpu=") then
          To_Free       := CPU;
          CPU           := new String'(Switch_Value (S, "-mcpu="));
       elsif Starts_With (S, "-mtune=") then
-         if CPU.all = "generic" then
+         if CPU.all = "generic" and then Arch = null then
             To_Free    := CPU;
             CPU        := new String'(Switch_Value (S, "-march="));
          end if;
+
+      --  -mabi= tells the code generator which ABI to use on some
+      --  platforms
+
+      elsif Starts_With (S, "-mabi=") then
+         To_Free         := ABI;
+         ABI             := new String'(Switch_Value (S, "-mabi="));
+         Tagged_Pointers := ABI.all = "purecap";
 
       --  We support -mXXX and -mno-XXX by adding +XXX or -XXX, respectively,
       --  to the list of features.
@@ -221,7 +233,7 @@ package body GNATLLVM.Codegen is
                   Code_Opt_Level := 3;
                end if;
             when others =>
-               null;
+               Early_Error ("unsupported optimization switch: " & S);
          end case;
       elsif S = "-fno-strict-aliasing" then
          No_Strict_Aliasing_Flag := True;
@@ -290,6 +302,46 @@ package body GNATLLVM.Codegen is
          PIC_Level := 0;
          PIE_Level := 0;
 
+      elsif Starts_With (S, "-fsanitize=") then
+         declare
+            Sanitizers : constant String :=
+              Switch_Value (S, "-fsanitize=");
+            --  Comma-separated list of sanitizers.
+
+            Current_Start : Positive := Sanitizers'First;
+            Current_End   : Positive := Current_Start;
+
+         begin
+            while Current_Start < Sanitizers'Last loop
+
+               --  Advance until the next comma or the end of the string
+
+               for J in Current_Start + 1 .. Sanitizers'Last loop
+                  if Sanitizers (J) = ',' then
+                     Current_End := J - 1;
+                     exit;
+                  elsif J = Sanitizers'Last then
+                     Current_End := J;
+                  end if;
+               end loop;
+
+               --  Parse the sanitizer
+
+               if Sanitizers (Current_Start .. Current_End) = "fuzzer" then
+                  Enable_Fuzzer := True;
+               elsif Sanitizers (Current_Start .. Current_End) = "address" then
+                  Enable_Address_Sanitizer := True;
+               else
+                  Early_Error
+                    ("unsupported sanitizer: " &
+                     Sanitizers
+                       (Current_Start .. Current_End));
+               end if;
+
+               exit when Current_End = Sanitizers'Last;
+               Current_Start := Current_End + 2;
+            end loop;
+         end;
       elsif S = "-mdso-preemptable" then
          DSO_Preemptable := True;
       elsif S = "-mdso-local" then
@@ -375,6 +427,13 @@ package body GNATLLVM.Codegen is
       Normalized_Target_Triple :=
         new String'(Normalize_Target_Triple (Target_Triple.all));
 
+      if Tagged_Pointers then
+
+         --  The merge-functions pass currently can't handle architectures
+         --  where the size type doesn't have pointer length.
+
+         Merge_Functions := False;
+      end if;
    end Scan_Command_Line;
 
    -----------------
@@ -490,18 +549,47 @@ package body GNATLLVM.Codegen is
          Reloc_Mode := Reloc_PIC;
       end if;
 
+      --  The CPU and the list of features are determined based on various
+      --  settings, such as the user-specified target architecture and CPU,
+      --  and target-specific defaults.
+
+      if Starts_With (Normalized_Target_Triple.all, "nvptx") then
+         --  For Nvidia GPU targets, the architecture name is also the CPU
+         --  name (see tools::getCPUName in
+         --  clang/lib/Driver/ToolChains/CommonArgs.cpp).
+         CPU := (if Arch = null then new String'("") else Arch);
+      end if;
+
+      declare
+         Arch_Features : constant String :=
+           Get_Features
+             (Normalized_Target_Triple.all,
+              (if Arch = null then "" else Arch.all), CPU.all);
+         New_Features  : String_Access;
+
+      begin
+         if Arch_Features /= "" then
+            New_Features :=
+              new String'(Arch_Features & "," & Features.all);
+            Free (Features);
+            Features := New_Features;
+         end if;
+      end;
+
       Target_Machine    :=
-        Create_Target_Machine
+        Create_Target_Machine_With_ABI
           (T          => LLVM_Target,
            Triple     => Normalized_Target_Triple.all,
            CPU        => CPU.all,
            Features   => Features.all,
+           ABI        => ABI.all,
            Level      => Code_Gen_Level,
            Reloc      => Reloc_Mode,
            Code_Model => Code_Model);
 
       Get_Target_C_Types
-        (Normalized_Target_Triple.all, CPU.all, Target_C_Types, Success);
+        (Normalized_Target_Triple.all, CPU.all, ABI.all, Features.all,
+         Target_C_Types, Success);
 
       if not Success then
          Early_Error ("cannot get C type information from LLVM");
@@ -515,6 +603,8 @@ package body GNATLLVM.Codegen is
       else
          Module_Data_Layout := Create_Target_Data_Layout (Target_Machine);
       end if;
+
+      Address_Space := Get_Default_Address_Space (Module_Data_Layout);
 
       Set_Target             (Module, Normalized_Target_Triple.all);
       Set_Module_Data_Layout (Module, Module_Data_Layout);
@@ -618,18 +708,20 @@ package body GNATLLVM.Codegen is
          if Verified then
             if LLVM_Optimize_Module
               (Module, Target_Machine,
-               Code_Opt_Level        => Code_Opt_Level,
-               Size_Opt_Level        => Size_Opt_Level,
-               Need_Loop_Info        => Emit_C,
-               No_Unroll_Loops       => No_Unroll_Loops,
-               No_Loop_Vectorization => No_Loop_Vectorization,
-               No_SLP_Vectorization  => No_SLP_Vectorization,
-               Merge_Functions       => Merge_Functions,
-               Prepare_For_Thin_LTO  => Prepare_For_Thin_LTO,
-               Prepare_For_LTO       => Prepare_For_LTO,
-               Reroll_Loops          => Reroll_Loops,
-               Pass_Plugin_Name      => Pass_Plugin_Name,
-               Error_Message         => Err_Msg'Address)
+               Code_Opt_Level           => Code_Opt_Level,
+               Size_Opt_Level           => Size_Opt_Level,
+               Need_Loop_Info           => Emit_C,
+               No_Unroll_Loops          => No_Unroll_Loops,
+               No_Loop_Vectorization    => No_Loop_Vectorization,
+               No_SLP_Vectorization     => No_SLP_Vectorization,
+               Merge_Functions          => Merge_Functions,
+               Prepare_For_Thin_LTO     => Prepare_For_Thin_LTO,
+               Prepare_For_LTO          => Prepare_For_LTO,
+               Reroll_Loops             => Reroll_Loops,
+               Enable_Fuzzer            => Enable_Fuzzer,
+               Enable_Address_Sanitizer => Enable_Address_Sanitizer,
+               Pass_Plugin_Name         => Pass_Plugin_Name,
+               Error_Message            => Err_Msg'Address)
             then
                Error_Msg_N ("could not optimize: " &
                               Get_LLVM_Error_Msg (Err_Msg),

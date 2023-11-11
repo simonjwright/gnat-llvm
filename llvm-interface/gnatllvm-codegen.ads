@@ -35,6 +35,9 @@ package GNATLLVM.Codegen is
    CPU             : String_Access  := new String'("generic");
    --  Name of the specific CPU for this compilation.
 
+   ABI             : String_Access := new String'("");
+   --  Name of the ABI to use during code generation.
+
    Features        : String_Access  := new String'("");
    --  Features to enable or disable for this target
 
@@ -84,6 +87,11 @@ package GNATLLVM.Codegen is
    No_Tail_Calls           : Boolean       := False;
    Pass_Plugin_Name        : String_Access := null;
    --  Switch options for optimization
+
+   Enable_Fuzzer            : Boolean := False;
+   Enable_Address_Sanitizer : Boolean := False;
+   --  Sanitizer options (including the fuzzer, which implies coverage
+   --  sanitizer)
 
    Force_Activation_Record_Parameter : Boolean := False;
    --  Indicates that we need to force all subprograms to have an activation

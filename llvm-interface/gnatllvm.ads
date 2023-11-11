@@ -155,6 +155,7 @@ package GNATLLVM is
       Long_Double_Size      : Interfaces.C.unsigned;
       Long_Double_Alignment : Interfaces.C.unsigned;
       Maximum_Alignment     : Interfaces.C.unsigned;
+      Register_Size         : Interfaces.C.unsigned;
    end record
      with Convention => C;
    --  C-compatible record of target-specific C type information. Members are
@@ -269,6 +270,9 @@ package GNATLLVM is
    Module_Data_Layout : Target_Data_T;
    --  LLVM current module data layout.
 
+   Address_Space      : Interfaces.C.unsigned;
+   --  Default LLVM address space for our module
+
    Convert_Module     : Module_T;
    --  The module use by Convert_Nonsymbolic_Constant
 
@@ -283,6 +287,11 @@ package GNATLLVM is
    Void_Ptr_T         : Type_T := No_Type_T;
    --  Pointer to arbitrary memory (we use i8 *); equivalent of
    --  Standard_A_Char.
+
+   Address_T          : Type_T := No_Type_T;
+   --  Type to represent System.Address and similar values. They need
+   --  special treatment on architectures with tagged pointers because a
+   --  simple integer type would lose any tags.
 
    A_Char_GL_Type    : GL_Type := No_GL_Type;
    Boolean_GL_Type   : GL_Type := No_GL_Type;
@@ -329,6 +338,11 @@ package GNATLLVM is
 
    Short_Enums          : Boolean := False;
    --  True if we should use the RM_Size, not Esize, for enums
+
+   Tagged_Pointers      : Boolean := False;
+   --  True if we're generating code for an architecture with tagged
+   --  pointers. This implies that we need special handling for values
+   --  representing addresses, such as System.Address.
 
    --  Define pieces to have maps from one value to another
 

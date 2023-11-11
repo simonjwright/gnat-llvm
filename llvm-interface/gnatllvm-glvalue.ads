@@ -126,8 +126,9 @@ package GNATLLVM.GLValue is
 
       Unknown,
       --  Object is an unknown relation to the type. Used for peculiar LLVM
-      --  objects such as landing pads or the structure representing the
-      --  return from a function.
+      --  objects such as landing pads, the structure representing the
+      --  return from a function, and fields that represent multiple
+      --  bitfields.
 
       Reference_To_Unknown,
       --  Similar to Unknown, but we know that this is a reference and a
@@ -837,6 +838,10 @@ package GNATLLVM.GLValue is
      (Is_Descendant_Of_Address (Full_Etype (V)))
      with Pre => Present (V);
 
+   function Is_Address (V : GL_Value) return Boolean is
+     (Is_Address_Compatible_Type (Full_Etype (V)))
+     with Pre => Present (V);
+
    function Is_Constrained (V : GL_Value) return Boolean is
      (Is_Constrained (Full_Etype (V)))
      with Pre => Present (V);
@@ -1153,6 +1158,14 @@ package GNATLLVM.GLValue is
    procedure Add_Writeonly_Attribute (V : GL_Value; Idx : Integer)
      with Pre => Is_A_Function (V), Inline;
    --  Add the Writeonly attribute to parameter with index Idx
+
+   procedure Add_Opt_For_Fuzzing_Attribute (V : GL_Value)
+     with Pre => Is_A_Function (V), Inline;
+   --  Add the OptForFuzzing attribute to function V
+
+   procedure Add_Sanitize_Address_Attribute (V : GL_Value)
+     with Pre => Is_A_Function (V), Inline;
+   --  Add the SanitizeAddress attribute to function V
 
    procedure Set_DSO_Local (V : GL_Value)
      with Pre => Is_A_Function (V) or else Is_A_Global_Variable (V), Inline;

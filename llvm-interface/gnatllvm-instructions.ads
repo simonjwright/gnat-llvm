@@ -940,6 +940,14 @@ package GNATLLVM.Instructions is
      with Pre  => Is_Pointer (Ptr) and then Present (GT),
           Post => Is_Pointer (GEP_Idx'Result), Inline;
 
+   function Null_Derived_Ptr
+     (V : GL_Value; GT : GL_Type; Name : String := "") return GL_Value
+   is
+     (G (GEP (IR_Builder, Byte_T, Const_Null (Void_Ptr_T), (1 => +V), Name),
+         GT))
+   with Pre  => Is_Discrete_Type (V),
+        Post => Present (Null_Derived_Ptr'Result);
+
    function Call
      (Func : GL_Value;
       Args : GL_Value_Array;
@@ -1010,6 +1018,22 @@ package GNATLLVM.Instructions is
      with Pre => Present (Func)
                   and then (for all V of Args => Present (V)),
           Inline;
+
+   function Get_Pointer_Address (Ptr : GL_Value) return GL_Value
+     with Pre  => Is_Address (Ptr) or else Is_Pointer (Ptr),
+          Post => Present (Get_Pointer_Address'Result);
+
+   function Set_Pointer_Address (Ptr, Addr : GL_Value) return GL_Value
+     with Pre  => (Is_Address (Ptr) or else Is_Pointer (Ptr))
+                  and then Is_Integer_Type (Addr),
+          Post => Present (Set_Pointer_Address'Result);
+
+   function Address_Add (Ptr, Offset : GL_Value) return GL_Value
+   is (if   Tagged_Pointers
+       then Set_Pointer_Address (Ptr, Get_Pointer_Address (Ptr) + Offset)
+       else Ptr + Offset)
+     with Pre  => Is_Discrete_Type (Ptr) and then Is_Integer_Type (Offset),
+          Post => Is_Discrete_Type (Address_Add'Result);
 
    function Landing_Pad
      (T                : Type_T;

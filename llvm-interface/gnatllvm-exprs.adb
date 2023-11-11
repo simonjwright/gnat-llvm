@@ -300,7 +300,20 @@ package body GNATLLVM.Exprs is
                                       else Char_Literal_Value (N)));
 
          when N_Integer_Literal =>
-            V := Const_Int (Prim_GT, Intval (N));
+
+            --  On architectures with tagged pointers, we need to represent
+            --  addresses as pointers to preserve tags; consequently,
+            --  address literals also need to be pointers. The easiest way
+            --  to get one from an integer is to derive it from the null
+            --  pointer.
+
+            if Tagged_Pointers and then Is_Address (GT) then
+               V :=
+                 Null_Derived_Ptr
+                   (Const_Int (Size_GL_Type, Intval (N)), GT);
+            else
+               V := Const_Int (Prim_GT, Intval (N));
+            end if;
 
          when N_Real_Literal =>
             if Is_Fixed_Point_Type (GT) then
@@ -418,10 +431,11 @@ package body GNATLLVM.Exprs is
       RHS_GT     : constant GL_Type      := Full_GL_Type (RHS_Node);
       LHS_BT     : constant GL_Type      := Base_GL_Type (LHS_GT);
       RHS_BT     : constant GL_Type      := Base_GL_Type (RHS_GT);
-      LVal       : constant GL_Value     :=
+      LVal       :          GL_Value     :=
         Emit_Convert_Value (LHS_Node, LHS_BT);
-      RVal       : constant GL_Value     :=
+      RVal       :          GL_Value     :=
         Emit_Convert_Value (RHS_Node, RHS_BT);
+      Ptr        :          GL_Value     := No_GL_Value;
       FP         : constant Boolean      := Is_Floating_Point_Type (LHS_BT);
       Ovfl_Check : constant Boolean      := Do_Overflow_Check (N)
         and then not (Is_A_Constant_Int (LVal)
@@ -444,6 +458,22 @@ package body GNATLLVM.Exprs is
 
       if Decls_Only then
          return Emit_Undef (Full_GL_Type (N));
+      end if;
+
+      --  If we're doing arithmetic on tagged pointers, extract their
+      --  addresses, perform the computation, and then reassemble the
+      --  result pointer.
+
+      if Tagged_Pointers then
+         if Is_Address (RVal) then
+            Ptr  := RVal;
+            RVal := Get_Pointer_Address (RVal);
+         end if;
+
+         if Is_Address (LVal) then
+            Ptr  := LVal;
+            LVal := Get_Pointer_Address (LVal);
+         end if;
       end if;
 
       case Nkind (N) is
@@ -613,6 +643,13 @@ package body GNATLLVM.Exprs is
          begin
             Result := Build_Select (Need_Adjust, Which_Adjust, Result);
          end;
+      end if;
+
+      --  If this was an operation on tagged pointers, assemble the result
+      --  pointer using tags from (one of) the arguments.
+
+      if Present (Ptr) then
+         Result := Set_Pointer_Address (Ptr, Result);
       end if;
 
       return Result;
@@ -1261,9 +1298,14 @@ package body GNATLLVM.Exprs is
             V := Ptr_To_Int (Get (V, Reference_For_Integer), GT,
                              "attr.address");
 
-            --  Now add in any bit offset
+            --  Now add in any bit offset. If the offset is zero don't try
+            --  to add it because the code that we emit in this case is
+            --  unsuitable for constant initializers.
 
-            return V + Const_Int (GT, Bits / BPU);
+            return
+              (if   Bits = 0
+               then V
+               else Address_Add (V, Const_Int (Size_GL_Type, Bits / BPU)));
 
          when Attribute_Pool_Address =>
 
@@ -1680,9 +1722,13 @@ package body GNATLLVM.Exprs is
       --  we know the size and know the object to store, we can convert
       --  Dest to the type of the pointer to Src, which we know is
       --  fixed-size, and do the store. If Dest is a pointer to an array
-      --  type, we need to point to the actual array data.
+      --  type, we need to point to the actual array data. But if Dest
+      --  isn't of its default type, the pointer pun below may cause us to
+      --  copy the wrong amount of data, so don't do this optimization
+      --  in that case.
 
-      elsif (No (E) or else Is_Loadable_Type (Full_GL_Type (E)))
+      elsif (No (E) or else (Is_Loadable_Type (Full_GL_Type (E))
+                             and then Full_GL_Type (E) = Related_Type (Dest)))
         and then (No (Value) or else Is_Loadable_Type (Value))
         and then not Is_Class_Wide_Equivalent_Type (Dest_GT)
       then
@@ -1855,21 +1901,29 @@ package body GNATLLVM.Exprs is
       end loop;
 
       declare
-         Args           : GL_Value_Array (1 .. Num_Inputs);
-         Constraint_Pos : Integer          := 0;
-         Input_Pos      : Nat              := 0;
-         Need_Comma     : Boolean          := False;
-         Constraint_Len : constant Integer :=
+         Args             : GL_Value_Array (1 .. Num_Inputs);
+         Constraint_Pos   : Integer          := 0;
+         Input_Pos        : Nat              := 0;
+         Need_Comma       : Boolean          := False;
+         Constraint_Len   : constant Integer :=
            Integer (Num_Inputs + Constraint_Length + 3);
-         Template_Len   : constant Integer :=
+         In_Template_Len  : constant Integer :=
            Integer (String_Length (Template_Strval));
-         Constraints    : String (1 .. Constraint_Len);
-         Template       : String (1 .. Template_Len);
-         Template_Char  : Character;
-         Asm            : GL_Value;
+         Out_Template_Len : constant Integer :=
+           In_Template_Len + (Integer (Num_Inputs) * 3);
+         Constraints      : String (1 .. Constraint_Len);
+         Template         : String (1 .. Out_Template_Len);
+         Template_Char    : Character;
+         Arg_Modifier     : String (1 .. In_Template_Len);
+         Arg_Modifier_Pos : Integer;
+         Asm              : GL_Value;
+         In_Template_Pos  : Integer := 0;
+         Out_Template_Pos : Integer := 0;
 
          procedure Add_Char (C : Character);
          procedure Add_Constraint (N : N_String_Literal_Id);
+         procedure Add_Template_Char (C : Character);
+         procedure Next_Template_Char;
 
          --------------
          -- Add_Char --
@@ -1896,6 +1950,29 @@ package body GNATLLVM.Exprs is
                Add_Char (Get_Character (Get_String_Char (Strval (N), J)));
             end loop;
          end Add_Constraint;
+
+         -----------------------
+         -- Add_Template_Char --
+         -----------------------
+
+         procedure Add_Template_Char (C : Character) is
+         begin
+            Out_Template_Pos := Out_Template_Pos + 1;
+            Template (Out_Template_Pos) := C;
+         end Add_Template_Char;
+
+         ------------------------
+         -- Next_Template_Char --
+         ------------------------
+
+         procedure Next_Template_Char is
+         begin
+            In_Template_Pos := In_Template_Pos + 1;
+            Template_Char :=
+              Get_Character
+                (Get_String_Char
+                   (Template_Strval, Int (In_Template_Pos)));
+         end Next_Template_Char;
 
       begin
          --  Output constraints come first
@@ -1935,28 +2012,72 @@ package body GNATLLVM.Exprs is
             Clobber := Clobber_Get_Next;
          end loop;
 
-         --  Finally, build the template.  LLVM bitcode uses a syntax for the
-         --  template that is different from GNU as.  For now, we only
-         --  translate numeric input/output references (e.g., "%0").
+         --  Finally, build the template. LLVM bitcode uses a syntax for
+         --  the template that is different from GNU as. For now, we only
+         --  translate numeric input/output references with optional
+         --  argument modifiers (e.g., "%1" or "%w1").
 
-         for J in 1 .. Template_Len loop
-            Template_Char := Get_Character (Get_String_Char (Template_Strval,
-                                                             Int (J)));
-            Template (J) :=
-              (if Template_Char = '%' then '$' else Template_Char);
-         end loop;
+         Template_Parser : while In_Template_Pos < In_Template_Len loop
+            Next_Template_Char;
+
+            if Template_Char = '%' then
+
+               --  Parse the argument reference. It can be a simple
+               --  reference like "%1", or a reference with argument
+               --  modifiers like "%w1". The LLVM equivalents are "$1" and
+               --  "${1:w}", respectively.
+
+               Add_Template_Char ('$');
+               exit Template_Parser when
+                 In_Template_Pos = In_Template_Len;
+               Next_Template_Char;
+
+               if Template_Char in '0' .. '9' then
+                  Add_Template_Char (Template_Char);
+               else
+                  Arg_Modifier_Pos := 0;
+
+                  while Template_Char not in '0' .. '9' loop
+                     Arg_Modifier_Pos := Arg_Modifier_Pos + 1;
+                     Arg_Modifier (Arg_Modifier_Pos) := Template_Char;
+
+                     exit Template_Parser when
+                       In_Template_Pos = In_Template_Len;
+                     Next_Template_Char;
+                  end loop;
+
+                  Add_Template_Char ('{');
+                  Add_Template_Char (Template_Char);
+                  Add_Template_Char (':');
+
+                  for J in 1 .. Arg_Modifier_Pos loop
+                     Add_Template_Char (Arg_Modifier (J));
+                  end loop;
+
+                  Add_Template_Char ('}');
+               end if;
+            else
+               Add_Template_Char (Template_Char);
+            end if;
+         end loop Template_Parser;
 
          --  Create the inline asm
 
-         Asm := Inline_Asm (Args, Output_Variable, Template,
-                            Constraints (1 .. Constraint_Pos), Fn_T,
-                            Is_Asm_Volatile (N), False);
+         Asm :=
+           Inline_Asm
+             (Args, Output_Variable, Template (1 .. Out_Template_Pos),
+              Constraints (1 .. Constraint_Pos), Fn_T,
+              Is_Asm_Volatile (N), False);
 
-         --  If we have an output, generate the call with an output and store
-         --  the result. Otherwise, just do the call.
+         --  If we have an output, generate the call with an output and
+         --  store the result, casting the output pointer to the right type
+         --  to handle LLVM's refusal of some output types. Otherwise, just
+         --  do the call.
 
          if Present (Output_Variable) then
-            Store (Call (Asm, Fn_T, Args), Output_Val);
+            Store
+              (Call (Asm, Fn_T, Args),
+               Ptr_To_Ref (Output_Val, Related_Type (Asm)));
          else
             Call (Asm, Fn_T, Args);
          end if;

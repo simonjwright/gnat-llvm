@@ -899,7 +899,7 @@ package body GNATLLVM.Variables is
               --  Operand must not need elaboration
 
               and then (not Is_Scalar_Type (GT)
-                          or else Type_Of (GT) = Size_T
+                          or else Type_Of (GT) = Address_T
                           or else Is_A_Constant_Int (Emit_No_Error
                                                        (Expression (N)))
                           or else Is_A_Constant_FP  (Emit_No_Error
@@ -1101,7 +1101,7 @@ package body GNATLLVM.Variables is
 
             if Is_Elementary_Type (In_GT) and then Is_Elementary_Type (GT) then
                if Is_Scalar_Type (GT)
-                 and then Type_Of (GT) /= Size_T
+                 and then Type_Of (GT) /= Address_T
                  and then Type_Of (GT) /= Type_Of (In_GT)
                then
                   Our_NS := True;
@@ -2443,6 +2443,7 @@ package body GNATLLVM.Variables is
          Mark_Volatile (LLVM_Var, Is_Volatile);
          Mark_Atomic   (LLVM_Var, Is_Atomic (E) or else Is_Atomic (GT));
          Set_Value     (E, LLVM_Var);
+         C_Set_Entity  (LLVM_Var, E);
          Set_Initializer
            (LLVM_Var, Const_Null_Relationship (GT, Deref (LLVM_Var)));
          Add_To_Elab_Proc (N);

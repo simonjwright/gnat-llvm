@@ -222,7 +222,7 @@ package body GNATLLVM.Types.Create is
          end if;
 
          Set_Associated_GL_Type (TE, GT);
-         return Pointer_Type (Type_Of (GT), 0);
+         return Pointer_Type (Type_Of (GT), Address_Space);
 
       --  If we have a fat reference to a subprogram, handle this normally
       --  (since the access type to it is always the same type), but don't
@@ -332,7 +332,16 @@ package body GNATLLVM.Types.Create is
             T := Void_Type;
 
          when Discrete_Or_Fixed_Point_Kind =>
-            T := Create_Discrete_Type (TE);
+
+            --  When targeting an architecture with tagged pointers, we
+            --  need to represent address types as pointers so that we
+            --  don't lose the ability to turn them back into access types.
+
+            T :=
+              (if Tagged_Pointers
+                 and then Is_Address_Compatible_Type (TE)
+               then Void_Ptr_T
+               else Create_Discrete_Type (TE));
 
          when Float_Kind =>
             T := Create_Floating_Point_Type (TE);
@@ -691,6 +700,7 @@ package body GNATLLVM.Types.Create is
 
       if Present (Clause) then
          N := Expression (Clause);
+         Found_Alignment_Clause := True;
       end if;
 
       --  If the alignment either doesn't fit into an int or is larger than the

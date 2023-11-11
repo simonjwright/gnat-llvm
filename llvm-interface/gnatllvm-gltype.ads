@@ -528,6 +528,10 @@ package GNATLLVM.GLType is
      (Is_Descendant_Of_Address (Full_Etype (GT)))
      with Pre => Present (GT);
 
+   function Is_Address (GT : GL_Type) return Boolean is
+     (Is_Address_Compatible_Type (Full_Etype (GT)))
+     with Pre => Present (GT);
+
    function No_Strict_Aliasing (GT : GL_Type) return Boolean is
      (No_Strict_Aliasing (Full_Etype (GT)))
      with Pre => Present (GT);
@@ -640,7 +644,7 @@ package GNATLLVM.GLType is
    function Number_Dimensions (GT : Array_GL_Type) return Pos is
      (Number_Dimensions (Full_Etype (GT)));
 
-   function Number_Bounds (GT : Array_GL_Type) return Pos is
+   function Number_Bounds (GT : Array_Or_PAT_GL_Type) return Pos is
      (Number_Bounds (Full_Etype (GT)));
 
    function Has_Volatile_Components (GT : Array_GL_Type) return Boolean is
@@ -669,6 +673,11 @@ package GNATLLVM.GLType is
    function Is_Zero_Size (GT : GL_Type) return Boolean is
      (not Is_Nonnative_Type (GT) and then GT_Size (GT) = Size_Const_Null)
      with Pre => Present (GT);
+
+   function Is_Zero_Size (V : GL_Value) return Boolean is
+     (Is_Zero_Size (Related_Type (V))
+      and then Relationship (V) /= Bounds_And_Data)
+     with Pre => Present (V);
 
    function C_Pass_By_Copy (GT : GL_Type) return Boolean is
      (C_Pass_By_Copy (Full_Etype (GT)))

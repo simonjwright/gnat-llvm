@@ -689,7 +689,8 @@ package body GNATLLVM.GLValue is
       if Is_Unconstrained_Array (GT) or else Type_Needs_Bounds (GT)
         or else Ekind (GT) = E_String_Literal_Subtype
       then
-         return Reference_To_Bounds_And_Data;
+         return (if   Has_Bounds_In_Fat_Pointer (GT)
+                 then Reference else Reference_To_Bounds_And_Data);
       else
          return R;
       end if;
@@ -711,7 +712,9 @@ package body GNATLLVM.GLValue is
       --  that relationship and make a pointer to it.
 
       if Deref (R) /= Invalid then
-         return Pointer_Type (Type_For_Relationship (GT, Deref (R)), 0);
+         return
+           Pointer_Type
+             (Type_For_Relationship (GT, Deref (R)), Address_Space);
       end if;
 
       --  Handle all other relationships here
@@ -727,10 +730,11 @@ package body GNATLLVM.GLValue is
             return Build_Struct_Type ((1 => T, 2 => Bit_T));
 
          when Object =>
-            return (if Is_Loadable_Type (GT) then T else Pointer_Type (T, 0));
+            return (if   Is_Loadable_Type (GT)
+                    then T else Pointer_Type (T, Address_Space));
 
          when Trampoline | Thin_Pointer | Any_Reference =>
-            return Pointer_Type (T, 0);
+            return Pointer_Type (T, Address_Space);
 
          when Activation_Record =>
             return Byte_T;
@@ -991,7 +995,10 @@ package body GNATLLVM.GLValue is
             --  The bounds are in front of the data for a thin pointer
 
             elsif Our_R = Thin_Pointer then
-               Result := Ptr_To_Size_Type (V) - To_Bytes (Get_Bound_Size (GT));
+               Result :=
+                 Address_Add
+                   (Ptr_To_Size_Type (V),
+                    -To_Bytes (Get_Bound_Size (GT)));
                return Int_To_Relationship (Result, GT, R);
             elsif Our_R = Reference_To_Thin_Pointer then
                return Get (Get (V, Thin_Pointer), R);
@@ -1795,6 +1802,24 @@ package body GNATLLVM.GLValue is
    begin
       Add_Writeonly_Attribute (+V, unsigned (Idx));
    end Add_Writeonly_Attribute;
+
+   -----------------------------------
+   -- Add_Opt_For_Fuzzing_Attribute --
+   -----------------------------------
+
+   procedure Add_Opt_For_Fuzzing_Attribute (V : GL_Value) is
+   begin
+      Add_Opt_For_Fuzzing_Attribute (+V);
+   end Add_Opt_For_Fuzzing_Attribute;
+
+   ------------------------------------
+   -- Add_Sanitize_Address_Attribute --
+   ------------------------------------
+
+   procedure Add_Sanitize_Address_Attribute (V : GL_Value) is
+   begin
+      Add_Sanitize_Address_Attribute (+V);
+   end Add_Sanitize_Address_Attribute;
 
    -------------------
    -- Set_DSO_Local --

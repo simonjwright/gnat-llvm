@@ -137,6 +137,14 @@ package GNATLLVM.Wrapper is
    procedure Add_Writeonly_Attribute (Func : Value_T; Idx : unsigned)
      with Import, Convention => C, External_Name => "Add_Writeonly_Attribute";
 
+   procedure Add_Opt_For_Fuzzing_Attribute (Func : Value_T)
+     with Import, Convention => C,
+          External_Name => "Add_Opt_For_Fuzzing_Attribute";
+
+   procedure Add_Sanitize_Address_Attribute (Func : Value_T)
+     with Import, Convention => C,
+          External_Name => "Add_Sanitize_Address_Attribute";
+
    function Has_Inline_Attribute (Func : Value_T) return Boolean
      with Pre => Present (Is_A_Function (Func));
 
@@ -246,10 +254,12 @@ package GNATLLVM.Wrapper is
    --  Initializes various parts of the LLVM infrastructure.
 
    procedure Get_Target_C_Types
-     (Triple  : String;
-      CPU     : String;
-      Info    : out Target_C_Type_Info;
-      Success : out Boolean);
+     (Triple   : String;
+      CPU      : String;
+      ABI      : String;
+      Features : String;
+      Info     : out Target_C_Type_Info;
+      Success  : out Boolean);
    --  Retrieve information about the C types for the target.
 
    procedure Set_NUW (V : Value_T)
@@ -285,20 +295,22 @@ package GNATLLVM.Wrapper is
      with Pre => Present (MD), Inline;
 
    function LLVM_Optimize_Module
-     (Module                : Module_T;
-      Target_Machine        : Target_Machine_T;
-      Code_Opt_Level        : Nat;
-      Size_Opt_Level        : Nat;
-      Need_Loop_Info        : Boolean;
-      No_Unroll_Loops       : Boolean;
-      No_Loop_Vectorization : Boolean;
-      No_SLP_Vectorization  : Boolean;
-      Merge_Functions       : Boolean;
-      Prepare_For_Thin_LTO  : Boolean;
-      Prepare_For_LTO       : Boolean;
-      Reroll_Loops          : Boolean;
-      Pass_Plugin_Name      : String_Access;
-      Error_Message         : System.Address) return Boolean;
+     (Module                   : Module_T;
+      Target_Machine           : Target_Machine_T;
+      Code_Opt_Level           : Nat;
+      Size_Opt_Level           : Nat;
+      Need_Loop_Info           : Boolean;
+      No_Unroll_Loops          : Boolean;
+      No_Loop_Vectorization    : Boolean;
+      No_SLP_Vectorization     : Boolean;
+      Merge_Functions          : Boolean;
+      Prepare_For_Thin_LTO     : Boolean;
+      Prepare_For_LTO          : Boolean;
+      Reroll_Loops             : Boolean;
+      Enable_Fuzzer            : Boolean;
+      Enable_Address_Sanitizer : Boolean;
+      Pass_Plugin_Name         : String_Access;
+      Error_Message            : System.Address) return Boolean;
    --  Perform optimizations on the module. The function's interface mimics our
    --  LLVM bindings (e.g., LLVM.Core) by taking the address of a value of type
    --  Ptr_Err_Msg_Type for the optionally returned error message, and
@@ -425,4 +437,11 @@ package GNATLLVM.Wrapper is
    function Has_Default_PIE (Triple : String) return Boolean;
 
    function Get_Personality_Function_Name (Triple : String) return String;
+
+   function Get_Features (Triple, Arch, CPU : String) return String;
+
+   function Get_Default_Address_Space
+     (Layout : Target_Data_T) return unsigned
+     with Import, Convention => C,
+          External_Name => "Get_Default_Address_Space";
 end GNATLLVM.Wrapper;

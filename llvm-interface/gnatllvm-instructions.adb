@@ -15,11 +15,13 @@
 -- of the license.                                                          --
 ------------------------------------------------------------------------------
 
+with Errout;   use Errout;
 with Restrict; use Restrict;
 with Rident;   use Rident;
 with Targparm; use Targparm;
 
 with GNATLLVM.Blocks;      use GNATLLVM.Blocks;
+with GNATLLVM.Builtins;    use GNATLLVM.Builtins;
 with GNATLLVM.Codegen;     use GNATLLVM.Codegen;
 with GNATLLVM.Conversions; use GNATLLVM.Conversions;
 with GNATLLVM.GLType;      use GNATLLVM.GLType;
@@ -224,7 +226,11 @@ package body GNATLLVM.Instructions is
    function Ptr_To_Int
      (V : GL_Value; GT : GL_Type; Name : String := "") return GL_Value
    is
-     (GM (Ptr_To_Int (IR_Builder, +V, Type_Of (GT), Name), GT, GV => V));
+     (GM
+        ((if   Tagged_Pointers
+          then Bit_Cast (IR_Builder, +V, Void_Ptr_T, Name)
+          else Ptr_To_Int (IR_Builder, +V, Type_Of (GT), Name)),
+         GT, GV => V));
 
    ----------------
    -- Int_To_Ref --
@@ -233,10 +239,13 @@ package body GNATLLVM.Instructions is
    function Int_To_Ref
      (V : GL_Value; GT : GL_Type; Name : String := "") return GL_Value
    is
-      Result : GL_Value :=
-        GM_Ref (Int_To_Ptr (IR_Builder, +V,
-                            Pointer_Type (Type_Of (GT), 0), Name),
-                GT, V);
+      Typ    : constant Type_T  :=
+        Pointer_Type (Type_Of (GT), Address_Space);
+      Ptr    : constant Value_T :=
+        (if   Tagged_Pointers
+         then Pointer_Cast (IR_Builder, +V, Typ, Name)
+         else Int_To_Ptr (IR_Builder, +V, Typ, Name));
+      Result : GL_Value         := GM_Ref (Ptr, GT, V);
 
    begin
       Initialize_TBAA_If_Changed (Result, V);
@@ -253,9 +262,12 @@ package body GNATLLVM.Instructions is
       R    : GL_Relationship;
       Name : String := "") return GL_Value
    is
-      Result : GL_Value :=
-        GM (Int_To_Ptr (IR_Builder, +V, Type_For_Relationship (GT, R), Name),
-            GT, R, GV => V);
+      Typ    : constant Type_T  := Type_For_Relationship (GT, R);
+      Ptr    : constant Value_T :=
+        (if   Tagged_Pointers
+         then Pointer_Cast (IR_Builder, +V, Typ, Name)
+         else Int_To_Ptr (IR_Builder, +V, Typ, Name));
+      Result : GL_Value         := GM (Ptr, GT, R, GV => V);
 
    begin
       Initialize_TBAA_If_Changed (Result, V);
@@ -293,9 +305,11 @@ package body GNATLLVM.Instructions is
      (V : GL_Value; GT : GL_Type; Name : String := "") return GL_Value
    is
       Result : GL_Value :=
-        GM_Ref (Pointer_Cast (IR_Builder, +V,
-                              Pointer_Type (Type_Of (GT), 0), Name),
-                GT, V);
+        GM_Ref
+          (Pointer_Cast
+             (IR_Builder, +V, Pointer_Type (Type_Of (GT), Address_Space),
+              Name),
+           GT, V);
 
    begin
       Initialize_TBAA_If_Changed (Result, V);
@@ -310,7 +324,7 @@ package body GNATLLVM.Instructions is
    is
       Result : GL_Value :=
         GM_Ref (Pointer_Cast (IR_Builder, +V,
-                              Pointer_Type (Type_Of (T), 0), Name),
+                              Pointer_Type (Type_Of (T), Address_Space), Name),
                 Full_Designated_GL_Type (T), V);
 
    begin
@@ -1312,8 +1326,9 @@ package body GNATLLVM.Instructions is
         (if Special_Atomic then Int_Ty (Result_Bits) else T);
       --  Type that Ptr_Val will have
 
-      Equiv_T        : constant Type_T         :=
-        (if Special_Atomic then Pointer_Type (Ptr_T, 0) else No_Type_T);
+      Equiv_T : constant Type_T :=
+        (if Special_Atomic then Pointer_Type (Ptr_T, Address_Space)
+         else No_Type_T);
       --  Pointer to integer type with size matching that of the type
       --  to be loaded
 
@@ -1333,7 +1348,10 @@ package body GNATLLVM.Instructions is
       --  an undef. Likewise if the pointer is an undef (meaning it was
       --  zero-sized).
 
-      if Emit_C and then (Is_Zero_Size (Load_GT) or else Is_Undef (Ptr)) then
+      if Emit_C
+        and then ((Is_Zero_Size (Load_GT) and then New_R /= Bounds_And_Data)
+                  or else Is_Undef (Ptr))
+      then
          return Get_Undef_Relationship (Load_GT, New_R);
 
       --  If this needs a copy-in, make a temporary for it, copy the
@@ -1401,7 +1419,7 @@ package body GNATLLVM.Instructions is
       Equiv_T        : constant Type_T  :=
         (if   Special_Atomic then Int_Ty (Result_Bits) else No_Type_T);
       Ptr_T          : constant Type_T  :=
-        (if   Special_Atomic then Pointer_Type (Equiv_T, 0)
+        (if   Special_Atomic then Pointer_Type (Equiv_T, Address_Space)
          else No_Type_T);
       Ptr_Val        : constant Value_T :=
         (if   Special_Atomic then Pointer_Cast (IR_Builder, +Ptr, Ptr_T, "")
@@ -1436,7 +1454,7 @@ package body GNATLLVM.Instructions is
       --  Likewise if the address is an object that was zero-sized and is
       --  now an undef.
 
-      if Emit_C and then (Is_Zero_Size (GT) or else Is_Undef (Ptr)) then
+      if Emit_C and then (Is_Zero_Size (Expr) or else Is_Undef (Ptr)) then
          return;
 
       --  Otherwise, do the actual store and set the attributes
@@ -1727,15 +1745,34 @@ package body GNATLLVM.Instructions is
       Is_Volatile    : Boolean := False;
       Is_Stack_Align : Boolean := False) return GL_Value
    is
-      GT        : constant GL_Type :=
+      GT        : GL_Type :=
         (if   Present (Output_Value)
          then Primitive_GL_Type (Full_Etype (Output_Value))
          else Void_GL_Type);
-      T         : constant Type_T  :=
+      T         : Type_T  :=
         (if Present (Output_Value) then Type_Of (GT) else Void_Type);
       Arg_Types : Type_Array (Args'Range);
 
    begin
+      if Is_Record_Type (GT) then
+         --  LLVM doesn't allow struct return types for inline assembly.
+         --  Therefore, if GT is a record, we need to use the equivalent
+         --  integer type for the return value, and then pointer-cast when
+         --  storing the result.
+
+         declare
+            GT_Bits : constant ULL := Get_Scalar_Bit_Size (GT);
+         begin
+            if GT_Bits not in 32 | 64 then
+               Error_Msg_N ("unsupported Asm output", Output_Value);
+            end if;
+
+            T  := Int_Ty (GT_Bits);
+            GT :=
+              (if GT_Bits = 32 then Int_32_GL_Type else Int_64_GL_Type);
+         end;
+      end if;
+
       for J in Args'Range loop
          Arg_Types (J) := Type_Of (Args (J));
       end loop;
@@ -1746,5 +1783,24 @@ package body GNATLLVM.Instructions is
                                   Is_Stack_Align),
                 GT, Reference_To_Subprogram);
    end Inline_Asm;
+
+   -------------------------
+   -- Get_Pointer_Address --
+   -------------------------
+
+   function Get_Pointer_Address (Ptr : GL_Value) return GL_Value
+   is (G (+Call (Get_Get_Address_Fn, (1 => Bit_Cast (Ptr, Void_Ptr_T))),
+          Size_GL_Type));
+
+   -------------------------
+   -- Set_Pointer_Address --
+   -------------------------
+
+   function Set_Pointer_Address (Ptr, Addr : GL_Value) return GL_Value
+   is (Bit_Cast
+         (Call
+            (Get_Set_Address_Fn,
+             (1 => Bit_Cast (Ptr, Void_Ptr_T), 2 => Addr)),
+          Ptr));
 
 end GNATLLVM.Instructions;

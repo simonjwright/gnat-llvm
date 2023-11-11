@@ -343,36 +343,40 @@ package body GNATLLVM.Wrapper is
    ---------------------------
 
    function LLVM_Optimize_Module
-     (Module                : Module_T;
-      Target_Machine        : Target_Machine_T;
-      Code_Opt_Level        : Nat;
-      Size_Opt_Level        : Nat;
-      Need_Loop_Info        : Boolean;
-      No_Unroll_Loops       : Boolean;
-      No_Loop_Vectorization : Boolean;
-      No_SLP_Vectorization  : Boolean;
-      Merge_Functions       : Boolean;
-      Prepare_For_Thin_LTO  : Boolean;
-      Prepare_For_LTO       : Boolean;
-      Reroll_Loops          : Boolean;
-      Pass_Plugin_Name      : String_Access;
-      Error_Message         : System.Address) return Boolean
+     (Module                   : Module_T;
+      Target_Machine           : Target_Machine_T;
+      Code_Opt_Level           : Nat;
+      Size_Opt_Level           : Nat;
+      Need_Loop_Info           : Boolean;
+      No_Unroll_Loops          : Boolean;
+      No_Loop_Vectorization    : Boolean;
+      No_SLP_Vectorization     : Boolean;
+      Merge_Functions          : Boolean;
+      Prepare_For_Thin_LTO     : Boolean;
+      Prepare_For_LTO          : Boolean;
+      Reroll_Loops             : Boolean;
+      Enable_Fuzzer            : Boolean;
+      Enable_Address_Sanitizer : Boolean;
+      Pass_Plugin_Name         : String_Access;
+      Error_Message            : System.Address) return Boolean
    is
       function LLVM_Optimize_Module_C
-        (Module                : Module_T;
-         Target_Machine        : Target_Machine_T;
-         Code_Opt_Level        : Nat;
-         Size_Opt_Level        : Nat;
-         Need_Loop_Info        : LLVM_Bool;
-         No_Unroll_Loops       : LLVM_Bool;
-         No_Loop_Vectorization : LLVM_Bool;
-         No_SLP_Vectorization  : LLVM_Bool;
-         Merge_Functions       : LLVM_Bool;
-         Prepare_For_Thin_LTO  : LLVM_Bool;
-         PrepareFor_LTO        : LLVM_Bool;
-         Reroll_Loops          : LLVM_Bool;
-         Pass_Plugin_Name      : chars_ptr;
-         Error_Message         : System.Address) return LLVM_Bool
+        (Module                   : Module_T;
+         Target_Machine           : Target_Machine_T;
+         Code_Opt_Level           : Nat;
+         Size_Opt_Level           : Nat;
+         Need_Loop_Info           : LLVM_Bool;
+         No_Unroll_Loops          : LLVM_Bool;
+         No_Loop_Vectorization    : LLVM_Bool;
+         No_SLP_Vectorization     : LLVM_Bool;
+         Merge_Functions          : LLVM_Bool;
+         Prepare_For_Thin_LTO     : LLVM_Bool;
+         PrepareFor_LTO           : LLVM_Bool;
+         Reroll_Loops             : LLVM_Bool;
+         Enable_Fuzzer            : LLVM_Bool;
+         Enable_Address_Sanitizer : LLVM_Bool;
+         Pass_Plugin_Name         : chars_ptr;
+         Error_Message            : System.Address) return LLVM_Bool
         with Import, Convention => C, External_Name => "LLVM_Optimize_Module";
       Need_Loop_Info_B : constant LLVM_Bool := Boolean'Pos (Need_Loop_Info);
       No_Unroll_B      : constant LLVM_Bool := Boolean'Pos (No_Unroll_Loops);
@@ -385,6 +389,9 @@ package body GNATLLVM.Wrapper is
         Boolean'Pos (Prepare_For_Thin_LTO);
       LTO_B            : constant LLVM_Bool := Boolean'Pos (Prepare_For_LTO);
       Reroll_B         : constant LLVM_Bool := Boolean'Pos (Reroll_Loops);
+      Fuzzer_B         : constant LLVM_Bool := Boolean'Pos (Enable_Fuzzer);
+      ASan_B           : constant LLVM_Bool :=
+        Boolean'Pos (Enable_Address_Sanitizer);
       Pass_PN_Ptr      : chars_ptr :=
         (if Pass_Plugin_Name = null then
             Null_Ptr
@@ -398,7 +405,8 @@ package body GNATLLVM.Wrapper is
                                 Code_Opt_Level, Size_Opt_Level,
                                 Need_Loop_Info_B, No_Unroll_B, No_Loop_Vect_B,
                                 No_SLP_Vect_B, Merge_B, Thin_LTO_B, LTO_B,
-                                Reroll_B, Pass_PN_Ptr, Error_Message);
+                                Reroll_B, Fuzzer_B, ASan_B, Pass_PN_Ptr,
+                                Error_Message);
       Free (Pass_PN_Ptr);
       return Result /= 0;
    end LLVM_Optimize_Module;
@@ -453,26 +461,30 @@ package body GNATLLVM.Wrapper is
    ------------------------
 
    procedure Get_Target_C_Types
-     (Triple  : String;
-      CPU     : String;
-      Info    : out Target_C_Type_Info;
-      Success : out Boolean)
+     (Triple   : String;
+      CPU      : String;
+      ABI      : String;
+      Features : String;
+      Info     : out Target_C_Type_Info;
+      Success  : out Boolean)
    is
       use Interfaces.C;
 
       procedure Get_Target_C_Types_C
-        (Triple  : char_array;
-         CPU     : char_array;
-         Info    : out Target_C_Type_Info;
-         Success : out unsigned_char)
+        (Triple   : char_array;
+         CPU      : char_array;
+         ABI      : char_array;
+         Features : char_array;
+         Info     : out Target_C_Type_Info;
+         Success  : out unsigned_char)
         with Import, Convention => C, External_Name => "Get_Target_C_Types";
 
-      Triple_Array : constant char_array := To_C (Triple);
-      CPU_Array    : constant char_array := To_C (CPU);
       Success_C    : unsigned_char;
 
    begin
-      Get_Target_C_Types_C (Triple_Array, CPU_Array, Info, Success_C);
+      Get_Target_C_Types_C
+        (To_C (Triple), To_C (CPU), To_C (ABI), To_C (Features), Info,
+         Success_C);
       Success := Success_C /= 0;
    end Get_Target_C_Types;
 
@@ -604,5 +616,29 @@ package body GNATLLVM.Wrapper is
    begin
       return Value (Get_Personality_Function_Name_C (Triple));
    end Get_Personality_Function_Name;
+
+   ------------------
+   -- Get_Features --
+   ------------------
+
+   function Get_Features (Triple, Arch, CPU : String) return String is
+      use Interfaces.C;
+
+      function Get_Features_C
+        (Triple, Arch, CPU : char_array) return chars_ptr with
+        Import, Convention => C, External_Name => "Get_Features";
+
+      Triple_C : constant char_array := To_C (Triple);
+      Arch_C   : constant char_array := To_C (Arch);
+      CPU_C    : constant char_array := To_C (CPU);
+
+      Result_C : chars_ptr := Get_Features_C (Triple_C, Arch_C, CPU_C);
+      Result : constant String :=
+        (if Result_C = Null_Ptr then "" else Value (Result_C));
+
+   begin
+      Free (Result_C);
+      return Result;
+   end Get_Features;
 
 end GNATLLVM.Wrapper;
